@@ -615,9 +615,9 @@ class TransConvLayer(nn.Module):
             attn_output = attn_output.mean(dim=1)
 
         # Minkowski time: [N, D-1] => => [N,D]
-        attn_output_time = ((attn_output**2).sum(dim=-1,keepdims=True)+self.manifold.k)**0.5
+        attn_output_time = torch.sqrt(
+            torch.clamp((attn_output ** 2).sum(dim=-1, keepdims=True) + self.manifold.k, min=1e-6))
         attn_output = torch.cat([attn_output_time, attn_output], dim=-1)
-
         if output_attn:
             return attn_output, attn_output
         else:
@@ -796,10 +796,11 @@ class PoincareMath:
     def _sqrt_c(self):
         return torch.sqrt(torch.clamp(self.c, min=self.eps))
 
-    def proj(self, x: torch.Tensor) -> torch.Tensor:
+    def proj(self, x: torch.Tensor, safe_margin: float = 1e-3) -> torch.Tensor:
         sqrt_c = self._sqrt_c().to(x.device, x.dtype)
-        maxnorm = (1.0 - self.eps) / sqrt_c
-        norm = x.norm(dim=-1, keepdim=True).clamp_min(self.eps)
+        maxnorm = (1.0 - safe_margin) / sqrt_c
+        # 【修复】使用安全的 norm 计算：先截断，再开方
+        norm = torch.sqrt((x * x).sum(dim=-1, keepdim=True).clamp_min(self.eps))
         cond = norm > maxnorm
         scale = maxnorm / norm
         return torch.where(cond, x * scale, x)
@@ -817,7 +818,8 @@ class PoincareMath:
     def expmap0(self, v: torch.Tensor) -> torch.Tensor:
         c = self.c.to(v.device, v.dtype) if isinstance(self.c, torch.Tensor) else torch.tensor(self.c, device=v.device, dtype=v.dtype)
         sqrt_c = torch.sqrt(torch.clamp(c, min=self.eps))
-        v_norm = v.norm(dim=-1, keepdim=True).clamp_min(self.eps)
+        # 【修复】
+        v_norm = torch.sqrt((v * v).sum(dim=-1, keepdim=True).clamp_min(self.eps))
         out = torch.tanh(sqrt_c * v_norm) * v / (sqrt_c * v_norm)
         return self.proj(out)
 
@@ -825,7 +827,8 @@ class PoincareMath:
         y = self.proj(y)
         c = self.c.to(y.device, y.dtype) if isinstance(self.c, torch.Tensor) else torch.tensor(self.c, device=y.device, dtype=y.dtype)
         sqrt_c = torch.sqrt(torch.clamp(c, min=self.eps))
-        y_norm = y.norm(dim=-1, keepdim=True).clamp_min(self.eps)
+        # 【修复】
+        y_norm = torch.sqrt((y * y).sum(dim=-1, keepdim=True).clamp_min(self.eps))
         arg = torch.clamp(sqrt_c * y_norm, min=0.0, max=1.0 - self.eps)
         return torch.atanh(arg) * y / (sqrt_c * y_norm)
 
@@ -833,16 +836,12 @@ class PoincareMath:
         diff = self.mobius_add(-x, y)
         c = self.c.to(diff.device, diff.dtype) if isinstance(self.c, torch.Tensor) else torch.tensor(self.c, device=diff.device, dtype=diff.dtype)
         sqrt_c = torch.sqrt(torch.clamp(c, min=self.eps))
-        diff_norm = diff.norm(dim=-1).clamp_min(self.eps)
+        # 【修复】
+        diff_norm = torch.sqrt((diff * diff).sum(dim=-1).clamp_min(self.eps))
         arg = torch.clamp(sqrt_c * diff_norm, min=0.0, max=1.0 - self.eps)
         return 2.0 * torch.atanh(arg) / sqrt_c
 
     def einstein_midpoint(self, x_ball: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-        """
-        x_ball: (N, D)
-        weights: (N, E)
-        return: (E, D)
-        """
         x_ball = self.proj(x_ball)
         c = self.c.to(x_ball.device, x_ball.dtype) if isinstance(self.c, torch.Tensor) else torch.tensor(self.c, device=x_ball.device, dtype=x_ball.dtype)
         x2 = (x_ball * x_ball).sum(dim=-1, keepdim=True)
@@ -862,7 +861,8 @@ class PoincareMath:
         if cond.any():
             midpoint_klein = torch.where(
                 cond,
-                midpoint_klein * (max_k_norm / k2.sqrt().clamp_min(self.eps)),
+                # 【修复核心 Bug】先 clamp_min 再 sqrt！
+                midpoint_klein * (max_k_norm / torch.sqrt(k2.clamp_min(self.eps))),
                 midpoint_klein,
             )
             k2 = torch.where(cond, max_k2, k2)
@@ -897,7 +897,29 @@ class GeometricGatingUnit(nn.Module):
     def forward(self, h_spatial: torch.Tensor, h_spectral: torch.Tensor) -> torch.Tensor:
         z = torch.sigmoid(self.gate(torch.cat([h_spatial, h_spectral], dim=-1)))
         return z * h_spatial + (1.0 - z) * h_spectral
+class AcoshSafe(torch.autograd.Function):
+    """
+    带有梯度截断的安全反双曲余弦函数，专门用于防止双曲图神经网络中的梯度爆炸。
+    """
+    @staticmethod
+    def forward(ctx, x, eps=1e-6):
+        ctx.eps = eps
+        # 限制最小值，防止前向计算时内部出现负数或 0 导致 NaN
+        x_clamp = torch.clamp(x, min=1.0 + eps)
+        ctx.save_for_backward(x_clamp)
+        return torch.log(x_clamp + torch.sqrt(x_clamp - 1.0) * torch.sqrt(x_clamp + 1.0))
 
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_clamp, = ctx.saved_tensors
+        # 反向传播时给分母加一个平滑项，防止除以 0
+        denom = torch.sqrt(torch.clamp(x_clamp * x_clamp - 1.0, min=ctx.eps))
+        grad_x = grad_output / denom
+        # 硬截断梯度，如果还是爆炸，可以把 100.0 调小一点，比如 10.0
+        grad_x = torch.clamp(grad_x, -100.0, 100.0)
+        # 因为 forward 有两个参数 (x, eps)，所以 backward 需要返回两个梯度
+        # eps 是常数，不需要梯度，所以返回 None
+        return grad_x, None
 class HConstructor(nn.Module):
     """
     Dysformer 风格动态双曲超图构造器。
@@ -1051,26 +1073,30 @@ class HConstructor(nn.Module):
                 self.num_edges = new_num
                 self._mark_shrink()
 
-    @staticmethod
-    def euc2lorentz(x: torch.Tensor, k: float = 1.0) -> torch.Tensor:
-        t = torch.sqrt((x * x).sum(dim=-1, keepdim=True) + k)
-        return torch.cat([t, x], dim=-1)
 
     @staticmethod
-    def acosh_safe(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        x = torch.clamp(x, min=1.0 + eps)
-        return torch.log(x + torch.sqrt(x - 1.0) * torch.sqrt(x + 1.0))
+    def euc2lorentz(x: torch.Tensor, k: float = 1.0) -> torch.Tensor:
+        # 【修复】增加 torch.clamp
+        t = torch.sqrt(torch.clamp((x * x).sum(dim=-1, keepdim=True) + k, min=1e-6))
+        return torch.cat([t, x], dim=-1)
 
     def hyperbolic_score(self, Q: torch.Tensor, K: torch.Tensor, k: float) -> torch.Tensor:
         Hh, Nq, Dh = Q.shape
         Nk = K.shape[1]
         Ql = self.euc2lorentz(Q.reshape(-1, Dh), k).reshape(Hh, Nq, Dh + 1)
         Kl = self.euc2lorentz(K.reshape(-1, Dh), k).reshape(Hh, Nk, Dh + 1)
+
         tQ, sQ = Ql[..., :1], Ql[..., 1:]
         tK, sK = Kl[..., :1], Kl[..., 1:]
+
+        # 计算洛伦兹内积
         lor = -(tQ @ tK.transpose(-1, -2)).squeeze(-3) + (sQ @ sK.transpose(-1, -2))
+
         cosh_d = -lor / max(float(k), self.eps)
-        d = self.acosh_safe(cosh_d)
+
+        # 核心修改：使用 .apply() 调用全局的 AcoshSafe，并传入 self.eps
+        d = AcoshSafe.apply(cosh_d, self.eps)
+
         return -(d ** 2)
 
     def _split_heads(self, x: torch.Tensor, h: int) -> torch.Tensor:
@@ -1266,13 +1292,12 @@ def euc2lorentz(x: torch.Tensor, k=1.0) -> torch.Tensor:
         k = k.to(x.device, x.dtype)
     else:
         k = torch.tensor(float(k), device=x.device, dtype=x.dtype)
-    t = torch.sqrt((x * x).sum(dim=-1, keepdim=True) + k)
+    # 【修复】增加 torch.clamp，防止内部出现负数或 0
+    t = torch.sqrt(torch.clamp((x * x).sum(dim=-1, keepdim=True) + k, min=1e-6))
     return torch.cat([t, x], dim=-1)
 
 class DysFormer(nn.Module):
-    """
-    先走 Dysformer 风格空间-频谱动态超图块，再送入 Lorentz HypFormer Transformer。
-    """
+
 
     def __init__(self, args):
         super().__init__()
