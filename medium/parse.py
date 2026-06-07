@@ -1,4 +1,4 @@
-from hypformer_new4 import Dysformer
+from Dysformer_fusion import Dysformer
 
 
 def parse_method(args, device):
@@ -108,7 +108,7 @@ def parser_add_main_args(parser):
                         help='随机丢弃原 Graph 中边的比例 (0 = 关闭)')
     # 如果只想对动态超图做实验，可再加 '--hyper_drop_prob'
     # ★ vis
-    parser.add_argument('--vis_emb',default='True',
+    parser.add_argument('--vis_emb',default='store_true',
                         help='训练结束后可视化节点嵌入')
     parser.add_argument('--vis_layer',    type=int, default=-1,
                         help='取第几层嵌入 (-1 表示最后一层 / 堆叠后)')

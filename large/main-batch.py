@@ -49,8 +49,8 @@ def get_device(use_cpu, device_id):
 
 def load_and_preprocess_data(args):
     print(f'>> Loading dataset {args.dataset} (⏳⏳)')
-    if 'hypformer_data_dir' in os.environ:
-        args.data_dir = os.environ['hypformer_data_dir']
+    if 'Dysformer_data_dir' in os.environ:
+        args.data_dir = os.environ['Dysformer_data_dir']
     dataset = load_dataset(args.data_dir, args.dataset, args.sub_dataset)
 
     if len(dataset.label.shape) == 1:

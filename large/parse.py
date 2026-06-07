@@ -1,5 +1,5 @@
 
-from hypformer_new4 import Dysformer
+from Dysformer_fusion import Dysformer
 
 def parse_method(args, c, d):
 
@@ -54,7 +54,7 @@ def parser_add_main_args(parser):
     parser.add_argument('--gnn_dropout', type=float, default=0.0, help='Dropout rate for GNN layers (default: 0.0)')
 
     # all-pair attention (Transformer) branch
-    parser.add_argument('--method', type=str, default='Dysformer', help='method to be used (default: hypformer)')
+    parser.add_argument('--method', type=str, default='Dysformer', help='method to be used (default: Dysformer)')
     parser.add_argument('--hidden_channels', type=int, default=32, help='Number of hidden channels (default: 32)')
     parser.add_argument('--trans_num_heads', type=int, default=1,
                         help='Number of heads for attention in Transformer (default: 1)')
