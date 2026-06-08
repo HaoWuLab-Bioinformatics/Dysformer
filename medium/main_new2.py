@@ -459,74 +459,6 @@ def compute_feature_importance_fast(
 
     return col_imp
 
-
-# =========================
-# 特征重要性画图
-# =========================
-def plot_and_save_feature_importance(
-        importance: np.ndarray,
-        dataset,
-        save_dir: str,
-        method: str,
-        topk: int = 30,
-):
-    feat_names = getattr(
-        dataset,
-        "feat_names",
-        [f"feat_{i}" for i in range(len(importance))],
-    )
-
-    pct = importance / (importance.sum() + 1e-12) * 100
-
-    idx_sorted = importance.argsort()[::-1]
-    idx_top = idx_sorted[:min(topk, len(importance))]
-
-    plt.figure(figsize=(max(10, len(idx_top) * 0.5), 4))
-
-    bars = plt.bar(range(len(idx_top)), pct[idx_top])
-
-    plt.xticks(
-        range(len(idx_top)),
-        [feat_names[i] for i in idx_top],
-        rotation=60,
-        ha="right",
-    )
-
-    plt.ylabel("IG归因占比 (%)")
-    plt.title(f"{dataset.name} – Top-{len(idx_top)} IG Feature Attribution")
-
-    for bar, val in zip(bars, pct[idx_top]):
-        plt.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.1,
-            f"{val:.1f}%",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-
-    plt.tight_layout()
-
-    os.makedirs(save_dir, exist_ok=True)
-
-    plt.savefig(
-        f"{save_dir}/{method}_feature_importance.png",
-        dpi=200,
-    )
-    plt.close()
-
-    df_save = pd.DataFrame({
-        "factor": feat_names,
-        "ig_attribution_raw": importance,
-        "ig_attribution_pct": pct,
-    })
-
-    df_save.to_excel(
-        f"{save_dir}/{method}_feature_importance.xlsx",
-        index=False,
-    )
-
-
 # =========================
 # 保存单个 run 的指标
 # =========================
@@ -548,120 +480,47 @@ def append_run_metrics(best_metric, excel_path, csv_path):
         df_new = df_run
 
     df_new.to_excel(excel_path, index=False)
-def select_best_embedding_layer_by_val(
-        model,
+# =========================
+# 保存 IG 特征重要性表格
+# =========================
+def save_feature_importance_table(
+        importance: np.ndarray,
         dataset,
-        split_idx,
-        metric="f1_macro",
-        max_iter=2000,
+        save_dir: str,
+        method: str,
 ):
-    """
-    提取 model.trans_conv.convs 每一层的输出 embedding，
-    用 train split 训练线性探针，
-    用 valid split 选择效果最好的一层。
-
-    返回:
-        best_layer_id: 最佳层编号
-        best_emb: 最佳层 embedding, ndarray, shape=(N, D)
-        layer_scores: 每层验证集得分
-    """
-
-    assert hasattr(model, "trans_conv"), "模型中未找到 trans_conv"
-    assert hasattr(model.trans_conv, "convs"), "模型中未找到 trans_conv.convs"
-
-    model.eval()
-
-    layer_outputs = []
-    handles = []
-
-    def make_hook(layer_id):
-        def hook(module, inp, out):
-            # 有些层可能输出 tuple/list，这里取第一个 tensor
-            if isinstance(out, (tuple, list)):
-                out_tensor = out[0]
-            else:
-                out_tensor = out
-
-            layer_outputs.append((layer_id, out_tensor.detach()))
-        return hook
-
-    # 给每一层都注册 hook
-    for layer_id, layer in enumerate(model.trans_conv.convs):
-        handles.append(layer.register_forward_hook(make_hook(layer_id)))
-
-    with torch.no_grad():
-        _ = model(dataset)
-
-    for h in handles:
-        h.remove()
-
-    if len(layer_outputs) == 0:
-        raise RuntimeError("没有捕获到任何层的 embedding，请检查 model.trans_conv.convs。")
-
-    # 按层编号排序，避免 hook 顺序问题
-    layer_outputs = sorted(layer_outputs, key=lambda x: x[0])
-
-    y = dataset.label.detach().cpu()
-
-    # 多分类标签应为 1D
-    if y.dim() > 1:
-        y = y.argmax(dim=1)
-
-    y_np = y.numpy()
-
-    train_idx = split_idx["train"].detach().cpu().numpy()
-    valid_idx = split_idx["valid"].detach().cpu().numpy()
-
-    best_layer_id = None
-    best_score = -1.0
-    best_emb = None
-    layer_scores = {}
-
-    for layer_id, emb_tensor in layer_outputs:
-        emb = emb_tensor.detach().cpu().numpy()
-
-        x_train = emb[train_idx]
-        y_train = y_np[train_idx]
-
-        x_valid = emb[valid_idx]
-        y_valid = y_np[valid_idx]
-
-        clf = LogisticRegression(
-            max_iter=max_iter,
-            class_weight="balanced",
-            solver="lbfgs",
-            multi_class="auto",
-            n_jobs=-1,
-        )
-
-        clf.fit(x_train, y_train)
-        pred_valid = clf.predict(x_valid)
-
-        if metric == "acc":
-            score = accuracy_score(y_valid, pred_valid)
-        elif metric == "f1_macro":
-            score = f1_score(y_valid, pred_valid, average="macro", zero_division=0)
-        elif metric == "f1_micro":
-            score = f1_score(y_valid, pred_valid, average="micro", zero_division=0)
-        else:
-            raise ValueError("metric 只能是 'acc', 'f1_macro', 或 'f1_micro'")
-
-        layer_scores[layer_id] = score
-
-        print(f">> Layer {layer_id} linear-probe val {metric}: {score:.4%}")
-
-        if score > best_score:
-            best_score = score
-            best_layer_id = layer_id
-            best_emb = emb
-
-    print(
-        f">> Best embedding layer = {best_layer_id}, "
-        f"val {metric} = {best_score:.4%}"
+    feat_names = getattr(
+        dataset,
+        "feat_names",
+        [f"feat_{i}" for i in range(len(importance))],
     )
 
-    return best_layer_id, best_emb, layer_scores
+    pct = importance / (importance.sum() + 1e-12) * 100
 
+    df_save = pd.DataFrame({
+        "factor": feat_names,
+        "ig_attribution_raw": importance,
+        "ig_attribution_pct": pct,
+    })
+
+    df_save = df_save.sort_values(
+        by="ig_attribution_raw",
+        ascending=False,
+    )
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    excel_path = f"{save_dir}/{method}_feature_importance.xlsx"
+    csv_path = f"{save_dir}/{method}_feature_importance.csv"
+
+    df_save.to_excel(excel_path, index=False)
+    df_save.to_csv(csv_path, index=False)
+
+    print(
+        f">> IG feature-importance table saved to:\n"
+        f"   {excel_path}\n"
+        f"   {csv_path}"
+    )
 
 # =========================
 # 主函数
@@ -1079,202 +938,6 @@ def main():
 
     print("✅ 已加载 best checkpoint，用 best epoch 模型进行可视化和 IG 归因")
 
-    # =========================
-    # embedding 可视化
-    # =========================
-    if args.vis_emb:
-        save_dir = f"results/{args.dataset}"
-        os.makedirs(save_dir, exist_ok=True)
-
-        try:
-            import umap
-        except ImportError:
-            umap = None
-
-        # 自动选择验证集效果最好的 embedding 层
-        best_layer_id, x_emb, layer_scores = select_best_embedding_layer_by_val(
-            model=model,
-            dataset=dataset,
-            split_idx=dataset.split_idx,
-            metric="f1_macro",  # 多分类推荐 f1_macro；如果类别均衡，也可以用 "acc"
-            max_iter=2000,
-        )
-
-        print(f">> 使用验证集效果最好的第 {best_layer_id} 层 embedding 进行可视化")
-
-        if 0 < args.vis_sample < 1:
-            n = x_emb.shape[0]
-            idx = np.random.choice(n, int(n * args.vis_sample), replace=False)
-
-            x_emb = x_emb[idx]
-            y_vis = dataset.label.cpu().numpy()[idx]
-        else:
-            y_vis = dataset.label.cpu().numpy()
-
-        if y_vis.ndim > 1:
-            y_vis = y_vis.argmax(axis=1)
-
-        is_3d = args.vis_method.endswith("3")
-        base_method = args.vis_method.rstrip("3")
-        n_comp = 3 if is_3d else 2
-
-        if base_method == "pca":
-            x_nd = PCA(n_components=n_comp).fit_transform(x_emb)
-
-        elif base_method == "tsne":
-            x_nd = TSNE(
-                n_components=n_comp,
-                perplexity=30,
-                learning_rate=200.0,
-                init="random",
-                random_state=42,
-            ).fit_transform(x_emb)
-
-        elif base_method == "umap":
-            assert umap is not None, "请先 pip install umap-learn"
-
-            x_nd = umap.UMAP(
-                n_components=n_comp,
-                random_state=42,
-            ).fit_transform(x_emb)
-
-        elif base_method == "pacmap":
-            import pacmap
-
-            x_nd = pacmap.PaCMAP(
-                n_components=n_comp,
-                n_neighbors=None,
-            ).fit_transform(x_emb)
-
-        elif base_method == "trimap":
-            import trimap
-
-            x_nd = trimap.TRIMAP(
-                n_dims=n_comp,
-            ).fit_transform(x_emb)
-
-        else:
-            raise ValueError(f"未知 vis_method: {args.vis_method}")
-
-        num_class_vis = int(y_vis.max() + 1)
-
-        if is_3d:
-            fig_png = plt.figure(figsize=(7, 6))
-            ax = fig_png.add_subplot(111, projection="3d")
-
-            for c in range(num_class_vis):
-                m = y_vis == c
-                ax.scatter(
-                    x_nd[m, 0],
-                    x_nd[m, 1],
-                    x_nd[m, 2],
-                    s=6,
-                    alpha=0.7,
-                    label=str(c),
-                )
-
-            ax.set_xlabel("Dim-1")
-            ax.set_ylabel("Dim-2")
-            ax.set_zlabel("Dim-3")
-
-            ax.legend(
-                title="Label",
-                bbox_to_anchor=(1.05, 1),
-                loc="upper left",
-                borderaxespad=0.0,
-            )
-
-            plt.title(
-                f"{args.dataset} – {base_method.upper()}-3D "
-                f"(best checkpoint emb)"
-            )
-            plt.tight_layout()
-
-            plt.savefig(
-                f"{save_dir}/{args.method}_latent_{args.vis_method}_changed.png",
-                dpi=200,
-            )
-            plt.close(fig_png)
-
-            fig_html = go.Figure()
-
-            for c in range(num_class_vis):
-                m = y_vis == c
-
-                fig_html.add_trace(
-                    go.Scatter3d(
-                        x=x_nd[m, 0],
-                        y=x_nd[m, 1],
-                        z=x_nd[m, 2],
-                        mode="markers",
-                        marker=dict(size=3),
-                        name=str(c),
-                    )
-                )
-
-            fig_html.update_layout(
-                scene=dict(
-                    xaxis_title="Dim-1",
-                    yaxis_title="Dim-2",
-                    zaxis_title="Dim-3",
-                ),
-                title=(
-                    f"{args.dataset} – {base_method.upper()}-3D "
-                    f"(best checkpoint emb)"
-                ),
-                margin=dict(l=0, r=0, b=0, t=40),
-            )
-
-            fig_html.write_html(
-                f"{save_dir}/{args.method}_{args.vis_method}_changed.html"
-            )
-
-            print(">> 交互式 3D 可视化已保存，可用浏览器打开查看")
-            print(
-                f">> Latent space ({args.vis_method}) with best checkpoint "
-                f"embedding saved to {save_dir}"
-            )
-
-        else:
-            plt.figure(figsize=(6, 5))
-
-            for c in range(num_class_vis):
-                m = y_vis == c
-
-                plt.scatter(
-                    x_nd[m, 0],
-                    x_nd[m, 1],
-                    s=6,
-                    alpha=0.7,
-                    label=str(c),
-                )
-
-            plt.xlabel("Dim-1")
-            plt.ylabel("Dim-2")
-
-            plt.legend(
-                title="Label",
-                bbox_to_anchor=(1.05, 1),
-                loc="upper left",
-                borderaxespad=0.0,
-            )
-
-            plt.title(
-                f"{args.dataset} – {base_method.upper()} "
-                f"(best checkpoint emb)"
-            )
-            plt.tight_layout()
-
-            plt.savefig(
-                f"{save_dir}/{args.method}_latent_{args.vis_method}_changed.png",
-                dpi=200,
-            )
-            plt.close()
-
-            print(
-                f">> Latent space ({args.vis_method}) with best checkpoint "
-                f"embedding saved to {save_dir}"
-            )
 
     # =========================
     # Integrated Gradients 特征归因
@@ -1300,13 +963,13 @@ def main():
         internal_batch_size=4,
     )
 
-    plot_and_save_feature_importance(
+    save_feature_importance_table(
         importance=importance,
         dataset=dataset,
         save_dir=save_dir,
         method=args.method,
-        topk=30,
     )
+
 
     print(f">> IG feature-importance figure saved to {save_dir}")
 
