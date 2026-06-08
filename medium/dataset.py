@@ -9,8 +9,8 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.neighbors import kneighbors_graph
 import torch
 import torch_geometric.transforms as T
-DATAPATH = '/mnt/mnt1/mzy/data/'
-DATA_ROOT = "/mnt/mnt1/mzy/data/zijian"
+DATAPATH = '../data/'
+DATA_ROOT = "../data/zijian"
 class NCDataset(object):
     def __init__(self, name, root=f'{DATAPATH}'):
         """
@@ -170,7 +170,7 @@ def load_mini_imagenet():
     return dataset
 def load_jiaolv_dataset():
     dataset_str = 'jiaolv'
-    data_path = '/mnt/mnt1/mzy/data/zijian/jiaolvyiyu'
+    data_path = '../data/zijian/jiaolvyiyu'
     file_path = os.path.join(data_path, '2020-2023年数据汇总_等级划分_最终.xlsx')
 
     # 1. 加载数据
@@ -278,7 +278,7 @@ def load_jiaolv_dataset():
 def load_yiyu_dataset():
 
     dataset_str = 'yiyu'
-    data_path = '/mnt/mnt1/mzy/data/zijian/jiaolvyiyu'
+    data_path = '../data/zijian/jiaolvyiyu'
     file_path = os.path.join(data_path, '2020-2023年数据汇总_等级划分_最终.xlsx')
 
     # 1. 加载数据
@@ -385,7 +385,7 @@ def load_yiyu_dataset():
     return dataset
 def load_jiaolv_dataset_missing():
     dataset_str = 'jiaolv'
-    data_path = '/mnt/mnt1/mzy/data/zijian/jiaolvyiyu'
+    data_path = '../data/zijian/jiaolvyiyu'
     file_path = os.path.join(data_path, '2020-2023年体质+问卷数据汇总处理后_等级划分(带缺失).xlsx')
 
     # 1. 加载数据
@@ -493,7 +493,7 @@ def load_jiaolv_dataset_missing():
 def load_yiyu_dataset_missing():
 
     dataset_str = 'yiyu'
-    data_path = '/mnt/mnt1/mzy/data/zijian/jiaolvyiyu'
+    data_path = '../zijian/jiaolvyiyu'
     file_path = os.path.join(data_path, '2020-2023年体质+问卷数据汇总处理后_等级划分(带缺失).xlsx')
 
     # 1. 加载数据
