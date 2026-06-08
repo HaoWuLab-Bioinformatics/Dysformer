@@ -12,7 +12,9 @@ Most graph neural networks are built on Euclidean space and static graph topolog
 - **Dynamic hypergraph construction** for adaptive high-order relationship modeling.
 - **Spatial-spectral dual-stream fusion** for combining global structural information and local spectral details.
 - **Trainable curvature regulation** for adapting the geometry across network layers.
+
 ![Dysformer Framework](https://github.com/HaoWuLab-Bioinformatics/Dysformer/blob/main/framework.png)
+
 ## Repository Structure
 
 ```text
