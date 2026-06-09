@@ -101,13 +101,13 @@ def load_nc_dataset(args):
         dataset = load_planetoid_dataset(dataname, args.no_feat_norm)
     elif dataname == 'mini':
         dataset = load_mini_imagenet()
-    elif dataname == 'jiaolv':
+    elif dataname == 'Anxiety':
         dataset = load_jiaolv_dataset()
-    elif dataname == 'yiyu':
+    elif dataname == 'Depression':
         dataset = load_yiyu_dataset()
-    elif dataname == 'jiaolv_missing':
+    elif dataname == 'Anxiety_raw':
         dataset = load_jiaolv_dataset_missing()
-    elif dataname == 'yiyu_missing':
+    elif dataname == 'Depression_raw':
         dataset = load_yiyu_dataset_missing()
     elif dataname == 'GermanCredit':  # 信用评分
         dataset = load_german_credit_data()
